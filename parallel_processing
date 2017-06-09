@@ -1,0 +1,102 @@
+*&---------------------------------------------------------------------*
+*& Report ZRAY_PARA_TESTING
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zray_para_testing.
+
+PARAMETERS: p_para TYPE c AS CHECKBOX.
+
+DATA: functioncall1(1) TYPE c.
+
+DATA: all_send_task   TYPE i,
+      all_return_task TYPE i,
+      tmp_send_task   TYPE i,
+      tmp_return_task TYPE i.
+
+DATA: lv_duration TYPE timestamp,
+      lv_start    TYPE timestamp,
+      lv_end      TYPE timestamp.
+
+CONSTANTS: done(1) TYPE c VALUE 'X'.
+
+START-OF-SELECTION.
+
+  DATA: lv_task  TYPE char20,
+        lv_count TYPE int1.
+
+  GET TIME STAMP FIELD lv_start.
+
+  DO 20 TIMES.
+
+    lv_count = lv_count + 1.
+
+    IF p_para = 'X'.
+
+      "try 3 times in case resource requesting failure
+      DO 3 TIMES.
+
+        lv_task = 'task' && lv_count.
+
+        "parallel processing
+        CALL FUNCTION 'ZFM_MASS_PROCESS'
+          STARTING NEW TASK lv_task
+          DESTINATION 'NONE'  "executing in the same sever
+          PERFORMING get_result ON END OF TASK
+          EXCEPTIONS
+            communication_failure = 1
+            system_failure        = 2
+            resource_failure      = 3.
+        "Keep count of sent tasks
+        IF sy-subrc EQ 0.
+          tmp_send_task = tmp_send_task + 1.
+          all_send_task = all_send_task + 1.
+          EXIT.
+          "if no resource available and requesting times < 3
+        ELSEIF sy-subrc = 3 AND sy-index < 3.
+          WAIT UP TO 2 SECONDS.
+        ELSE.
+          "error handling
+        ENDIF.
+
+      ENDDO.
+
+      IF tmp_send_task = 3. " max work process allowed
+        WAIT UNTIL tmp_return_task GE tmp_send_task.
+        CLEAR: tmp_return_task, tmp_send_task.
+      ENDIF.
+
+    ELSE.
+
+      CALL FUNCTION 'ZFM_MASS_PROCESS'.
+
+    ENDIF.
+
+  ENDDO.
+
+  IF p_para = 'X'.
+* Receive remaining asynchronous replies
+    WAIT UNTIL all_return_task GE all_send_task.
+  ENDIF.
+
+  GET TIME STAMP FIELD lv_end.
+  lv_duration = lv_end - lv_start.
+
+  WRITE:/  lv_duration.
+
+************************************************************************
+*       FORM FUNCTION1_DONE
+************************************************************************
+FORM get_result USING taskname.
+
+  RECEIVE RESULTS FROM FUNCTION 'ZFM_MASS_PROCESS'
+     EXCEPTIONS
+       communication_failure = 1
+       system_failure = 2.
+  IF sy-subrc EQ 0.
+  ENDIF.
+  "functioncall1 = done.
+  all_return_task = all_return_task + 1.
+  tmp_return_task = tmp_return_task + 1.
+
+ENDFORM.
